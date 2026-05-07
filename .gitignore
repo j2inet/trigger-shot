@@ -1,0 +1,52 @@
+# Windows / MSVC build artifacts
+*.user
+*.aps
+*.ncb
+*.sdf
+*.suo
+*.tlh
+*.tli
+*.pch
+*.obj
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.sbr
+*.bsc
+*.log
+*.tlog
+
+# CMake / Ninja
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Build output directories
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+
+# Visual Studio IDE files
+.vs/
+*.vcxproj.user
+ipch/
+
+# IntelliSense / Browse Information
+*.db
+*.VC.db
+*.VC.opendb
+
+# Resharper / Rider
+_ReSharper*/
+*.resharper
+
+# macOS
+.DS_Store

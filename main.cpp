@@ -15,6 +15,7 @@
 #include <mfreadwrite.h>
 #include <mferror.h>
 #include <wincodec.h>
+#include <wrl/client.h>
 
 #include <algorithm>
 #include <atomic>
@@ -35,7 +36,11 @@
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "propsys.lib")
 
+#pragma comment(lib, "Mf.lib")
+
+
 namespace fs = std::filesystem;
+std::wstring Title = L"By J2i.net, LLC. 2026 - All rights reserved. https://j2i.net/apps/trigger-shot";
 
 // ---------------------------------------------------------------------------
 // Globals
@@ -85,7 +90,7 @@ struct Camera
 {
     std::wstring     friendlyName;
     std::wstring     safeName;      // sanitized for filenames
-    IMFSourceReader* reader  = nullptr;
+    Microsoft::WRL::ComPtr<IMFSourceReader> reader  = nullptr;
     UINT32           width   = 0;
     UINT32           height  = 0;
     LONG             stride  = 0;   // negative = bottom-up
@@ -96,7 +101,7 @@ struct Camera
 
     ~Camera()
     {
-        if (reader) { reader->Release(); reader = nullptr; }
+        reader = nullptr;
     }
 };
 
@@ -107,7 +112,7 @@ struct Camera
 static HRESULT ConfigureReader(IMFSourceReader* reader, Camera& cam)
 {
     // Ask for RGB32 output (video processor MFT handles conversion).
-    IMFMediaType* pType = nullptr;
+    Microsoft::WRL::ComPtr<IMFMediaType> pType;
     HRESULT hr = MFCreateMediaType(&pType);
 
     if (SUCCEEDED(hr))
@@ -117,9 +122,9 @@ static HRESULT ConfigureReader(IMFSourceReader* reader, Camera& cam)
 
     if (SUCCEEDED(hr))
         hr = reader->SetCurrentMediaType(
-            (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, pType);
+            (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, pType.Get());
 
-    if (pType) { pType->Release(); pType = nullptr; }
+    if (pType) {  pType = nullptr; }
     if (FAILED(hr)) return hr;
 
     // Read back the negotiated media type to cache frame dimensions / stride.
@@ -128,7 +133,7 @@ static HRESULT ConfigureReader(IMFSourceReader* reader, Camera& cam)
 
     if (SUCCEEDED(hr))
     {
-        hr = MFGetAttributeSize(pType, MF_MT_FRAME_SIZE, &cam.width, &cam.height);
+        hr = MFGetAttributeSize(pType.Get(), MF_MT_FRAME_SIZE, &cam.width, &cam.height);
 
         if (SUCCEEDED(hr))
         {
@@ -139,7 +144,6 @@ static HRESULT ConfigureReader(IMFSourceReader* reader, Camera& cam)
             else
                 cam.stride = static_cast<LONG>(cam.width * 4u); // assume top-down
         }
-        pType->Release();
     }
     return hr;
 }
@@ -155,12 +159,12 @@ static HRESULT SaveJpeg(
     UINT32             rowBytes,
     const std::wstring& path)
 {
-    IWICImagingFactory*    pFactory    = nullptr;
-    IWICBitmap*            pBitmap     = nullptr;
-    IWICStream*            pStream     = nullptr;
-    IWICBitmapEncoder*     pEncoder    = nullptr;
-    IWICBitmapFrameEncode* pFrame      = nullptr;
-    IPropertyBag2*         pProps      = nullptr;
+    Microsoft::WRL::ComPtr<IWICImagingFactory>    pFactory    = nullptr;
+    Microsoft::WRL::ComPtr<IWICBitmap>            pBitmap     = nullptr;
+    Microsoft::WRL::ComPtr<IWICStream>            pStream     = nullptr;
+    Microsoft::WRL::ComPtr<IWICBitmapEncoder>     pEncoder    = nullptr;
+    Microsoft::WRL::ComPtr<IWICBitmapFrameEncode> pFrame      = nullptr;
+    Microsoft::WRL::ComPtr<IPropertyBag2>         pProps      = nullptr;
 
     HRESULT hr = CoCreateInstance(
         CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
@@ -177,7 +181,7 @@ static HRESULT SaveJpeg(
     if (SUCCEEDED(hr)) hr = pFactory->CreateStream(&pStream);
     if (SUCCEEDED(hr)) hr = pStream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
     if (SUCCEEDED(hr)) hr = pFactory->CreateEncoder(GUID_ContainerFormatJpeg, nullptr, &pEncoder);
-    if (SUCCEEDED(hr)) hr = pEncoder->Initialize(pStream, WICBitmapEncoderNoCache);
+    if (SUCCEEDED(hr)) hr = pEncoder->Initialize(pStream.Get(), WICBitmapEncoderNoCache);
     if (SUCCEEDED(hr)) hr = pEncoder->CreateNewFrame(&pFrame, &pProps);
 
     if (SUCCEEDED(hr))
@@ -190,7 +194,7 @@ static HRESULT SaveJpeg(
         v.fltVal = 0.92f;
         pProps->Write(1, &opt, &v);
 
-        hr = pFrame->Initialize(pProps);
+        hr = pFrame->Initialize(pProps.Get());
     }
 
     if (SUCCEEDED(hr)) hr = pFrame->SetSize(width, height);
@@ -201,16 +205,9 @@ static HRESULT SaveJpeg(
         hr = pFrame->SetPixelFormat(&fmt);
     }
 
-    if (SUCCEEDED(hr)) hr = pFrame->WriteSource(pBitmap, nullptr);
+    if (SUCCEEDED(hr)) hr = pFrame->WriteSource(pBitmap.Get(), nullptr);
     if (SUCCEEDED(hr)) hr = pFrame->Commit();
     if (SUCCEEDED(hr)) hr = pEncoder->Commit();
-
-    if (pProps)    pProps->Release();
-    if (pFrame)    pFrame->Release();
-    if (pEncoder)  pEncoder->Release();
-    if (pStream)   pStream->Release();
-    if (pBitmap)   pBitmap->Release();
-    if (pFactory)  pFactory->Release();
 
     return hr;
 }
@@ -223,7 +220,7 @@ static bool CaptureFrame(Camera& cam, const fs::path& outPath)
 {
     DWORD    streamIndex = 0, flags = 0;
     LONGLONG timestamp   = 0;
-    IMFSample* pSample   = nullptr;
+    Microsoft::WRL::ComPtr<IMFSample> pSample{};
 
     HRESULT hr = cam.reader->ReadSample(
         (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM,
@@ -231,11 +228,10 @@ static bool CaptureFrame(Camera& cam, const fs::path& outPath)
 
     if (FAILED(hr) || !pSample)
     {
-        if (pSample) pSample->Release();
         return false;
     }
 
-    IMFMediaBuffer* pBuf = nullptr;
+    Microsoft::WRL::ComPtr<IMFMediaBuffer> pBuf = nullptr;
     hr = pSample->ConvertToContiguousBuffer(&pBuf);
 
     bool ok = false;
@@ -265,10 +261,7 @@ static bool CaptureFrame(Camera& cam, const fs::path& outPath)
             ok = SUCCEEDED(hr);
             pBuf->Unlock();
         }
-        pBuf->Release();
     }
-
-    pSample->Release();
     return ok;
 }
 
@@ -280,7 +273,7 @@ static std::vector<std::unique_ptr<Camera>> EnumerateCameras()
 {
     std::vector<std::unique_ptr<Camera>> cameras;
 
-    IMFAttributes* pAttrs = nullptr;
+    Microsoft::WRL::ComPtr<IMFAttributes> pAttrs = nullptr;
     HRESULT hr = MFCreateAttributes(&pAttrs, 1);
     if (FAILED(hr)) return cameras;
 
@@ -291,9 +284,8 @@ static std::vector<std::unique_ptr<Camera>> EnumerateCameras()
     UINT32 count = 0;
 
     if (SUCCEEDED(hr))
-        hr = MFEnumDeviceSources(pAttrs, &ppDevices, &count);
+        hr = MFEnumDeviceSources(pAttrs.Get(), &ppDevices, &count);
 
-    pAttrs->Release();
 
     if (FAILED(hr) || count == 0)
     {
@@ -322,7 +314,7 @@ static std::vector<std::unique_ptr<Camera>> EnumerateCameras()
         cam->safeName = SanitizeForFilename(cam->friendlyName);
 
         // Activate source.
-        IMFMediaSource* pSource = nullptr;
+        Microsoft::WRL::ComPtr<IMFMediaSource> pSource = nullptr;
         if (FAILED(ppDevices[i]->ActivateObject(IID_PPV_ARGS(&pSource))))
         {
             ppDevices[i]->Release();
@@ -331,15 +323,13 @@ static std::vector<std::unique_ptr<Camera>> EnumerateCameras()
 
         // Create source reader with video processing enabled so the MFT
         // pipeline can convert any native format to our requested RGB32.
-        IMFAttributes* pReaderAttrs = nullptr;
+        Microsoft::WRL::ComPtr<IMFAttributes> pReaderAttrs = nullptr;
         MFCreateAttributes(&pReaderAttrs, 2);
         pReaderAttrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
 
-        IMFSourceReader* pReader = nullptr;
-        hr = MFCreateSourceReaderFromMediaSource(pSource, pReaderAttrs, &pReader);
+        Microsoft::WRL::ComPtr<IMFSourceReader> pReader = nullptr;
+        hr = MFCreateSourceReaderFromMediaSource(pSource.Get(), pReaderAttrs.Get(), &pReader);
 
-        pReaderAttrs->Release();
-        pSource->Release();
 
         if (FAILED(hr))
         {
@@ -349,7 +339,7 @@ static std::vector<std::unique_ptr<Camera>> EnumerateCameras()
 
         cam->reader = pReader;
 
-        if (FAILED(ConfigureReader(pReader, *cam)))
+        if (FAILED(ConfigureReader(pReader.Get(), *cam)))
         {
             // Camera opened but couldn't negotiate RGB32; skip it.
             ppDevices[i]->Release();
@@ -438,6 +428,8 @@ static bool ParseArgs(int argc, wchar_t* argv[], Options& opts)
 
 int wmain(int argc, wchar_t* argv[])
 {
+
+	std::wcout << Title << L"\n\n";
     Options opts;
     if (!ParseArgs(argc, argv, opts))
         return 1;

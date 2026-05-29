@@ -1,0 +1,8 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/trigger-shot/x64/Debug
+/x64/Debug
+/enc_temp_folder/538dbeca7c4da73a50951bac28e750
+*.user

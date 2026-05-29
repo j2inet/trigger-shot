@@ -405,7 +405,7 @@ static bool ParseArgs(int argc, wchar_t* argv[], Options& opts)
         if (a == L"--delay"  || a == L"-d") { opts.delaySecs = std::stod(nextArg()); hasDelay  = true; }
         else if (a == L"--output" || a == L"-o") { opts.outputDir  = nextArg(); hasOutput = true; }
         else if (a == L"--count"  || a == L"-n") { opts.maxCount   = std::stoll(nextArg()); }
-        else if (a == L"--help"   || a == L"-h") { PrintUsage(argv[0]); return false; }
+        else if (a == L"--help"   || a == L"-h" || a == L"/?") { PrintUsage(argv[0]); return false; }
     }
 
     if (!hasDelay || !hasOutput)

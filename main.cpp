@@ -38,6 +38,8 @@
 
 #pragma comment(lib, "Mf.lib")
 
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
 
 namespace fs = std::filesystem;
 std::wstring Title = L"By J2i.net, LLC. 2026 - All rights reserved. https://j2i.net/apps/trigger-shot";
@@ -213,6 +215,51 @@ static HRESULT SaveJpeg(
 }
 
 // ---------------------------------------------------------------------------
+// Watermark
+// ---------------------------------------------------------------------------
+
+static void DrawWatermark(BYTE* pixels, UINT32 width, UINT32 height, UINT32 rowBytes)
+{
+    // MF RGB32 leaves the alpha byte as 0; set it to 255 so GDI+ treats
+    // every pixel as fully opaque before we composite the text over it.
+    for (UINT32 off = 3; off < rowBytes * height; off += 4)
+        pixels[off] = 0xFF;
+
+    Gdiplus::Bitmap bmp(
+        static_cast<INT>(width), static_cast<INT>(height),
+        static_cast<INT>(rowBytes), PixelFormat32bppARGB, pixels);
+
+    Gdiplus::Graphics g(&bmp);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+
+    const WCHAR* text = L"Made with TimedSnap, an application from J2i.net, LLC";
+
+    // Scale font to ~2.5% of image height, clamped to a readable range.
+    float fontSize = std::clamp(static_cast<float>(height) * 0.025f, 14.0f, 52.0f);
+
+    Gdiplus::FontFamily family(L"Arial");
+    Gdiplus::Font font(&family, fontSize, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+
+    // Measure string so we can centre it precisely.
+    Gdiplus::RectF layout(0.0f, 0.0f,
+                          static_cast<float>(width), static_cast<float>(height));
+    Gdiplus::RectF bound;
+    g.MeasureString(text, -1, &font, layout, &bound);
+
+    float x = (static_cast<float>(width)  - bound.Width)  / 2.0f;
+    float y = (static_cast<float>(height) - bound.Height) / 2.0f;
+
+    // Dark semi-transparent drop shadow (offset 2 px).
+    Gdiplus::SolidBrush shadow(Gdiplus::Color(160, 0, 0, 0));
+    g.DrawString(text, -1, &font, Gdiplus::PointF(x + 2.0f, y + 2.0f), &shadow);
+
+    // White semi-transparent foreground text.
+    Gdiplus::SolidBrush brush(Gdiplus::Color(210, 255, 255, 255));
+    g.DrawString(text, -1, &font, Gdiplus::PointF(x, y), &brush);
+}
+
+// ---------------------------------------------------------------------------
 // Frame capture
 // ---------------------------------------------------------------------------
 
@@ -255,6 +302,8 @@ static bool CaptureFrame(Camera& cam, const fs::path& outPath)
                        data           + srcRow * absStride,
                        absStride);
             }
+
+            DrawWatermark(topDown.data(), cam.width, cam.height, absStride);
 
             hr = SaveJpeg(topDown.data(), cam.width, cam.height,
                           absStride, outPath.wstring());
@@ -446,12 +495,28 @@ int wmain(int argc, wchar_t* argv[])
 
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
 
+    // GDI+ must be started before COM so WIC + GDI+ share one apartment.
+    Gdiplus::GdiplusStartupInput gdipInput;
+    ULONG_PTR gdipToken = 0;
+    Gdiplus::GdiplusStartup(&gdipToken, &gdipInput, nullptr);
+
     // COM / Media Foundation.
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr)) { std::wcerr << L"COM init failed.\n"; return 1; }
+    if (FAILED(hr))
+    {
+        std::wcerr << L"COM init failed.\n";
+        Gdiplus::GdiplusShutdown(gdipToken);
+        return 1;
+    }
 
     hr = MFStartup(MF_VERSION);
-    if (FAILED(hr)) { std::wcerr << L"MF init failed.\n"; CoUninitialize(); return 1; }
+    if (FAILED(hr))
+    {
+        std::wcerr << L"MF init failed.\n";
+        CoUninitialize();
+        Gdiplus::GdiplusShutdown(gdipToken);
+        return 1;
+    }
 
     // Enumerate cameras.
     std::wcout << L"Scanning for cameras...\n";
@@ -462,6 +527,7 @@ int wmain(int argc, wchar_t* argv[])
         std::wcout << L"No webcams found.\n";
         MFShutdown();
         CoUninitialize();
+        Gdiplus::GdiplusShutdown(gdipToken);
         return 1;
     }
 
@@ -520,5 +586,6 @@ int wmain(int argc, wchar_t* argv[])
 
     MFShutdown();
     CoUninitialize();
+    Gdiplus::GdiplusShutdown(gdipToken);
     return 0;
 }

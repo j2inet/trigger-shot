@@ -114,13 +114,17 @@ struct Camera
 static HRESULT ConfigureReader(IMFSourceReader* reader, Camera& cam)
 {
     // Ask for RGB32 output (video processor MFT handles conversion).
-    Microsoft::WRL::ComPtr<IMFMediaType> pType;
+    Microsoft::WRL::ComPtr<IMFMediaType> pType, nativeType;
+    Microsoft::WRL::ComPtr<IMFMediaTypeHandler> mediaTypeHandler;
+
     HRESULT hr = MFCreateMediaType(&pType);
 
     if (SUCCEEDED(hr))
         hr = pType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     if (SUCCEEDED(hr))
         hr = pType->SetGUID(MF_MT_SUBTYPE,    MFVideoFormat_RGB32);
+
+    //hr = pType->SetUINT32(MF_MT_FRAME_SIZE, 8000 * 6000);
 
     if (SUCCEEDED(hr))
         hr = reader->SetCurrentMediaType(
@@ -132,6 +136,13 @@ static HRESULT ConfigureReader(IMFSourceReader* reader, Camera& cam)
     // Read back the negotiated media type to cache frame dimensions / stride.
     hr = reader->GetCurrentMediaType(
         (DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, &pType);
+    
+        reader->GetNativeMediaType(
+		(DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &nativeType);
+        hr = MFGetAttributeSize(nativeType.Get(), MF_MT_FRAME_SIZE, &cam.width, &cam.height);
+        Microsoft::WRL::ComPtr<IMFPresentationDescriptor> pPD = nullptr;
+        //HRESULT hr = reader->CreatePresentationDescriptor(&pPD);
+
 
     if (SUCCEEDED(hr))
     {
@@ -303,7 +314,7 @@ static bool CaptureFrame(Camera& cam, const fs::path& outPath)
                        absStride);
             }
 
-            DrawWatermark(topDown.data(), cam.width, cam.height, absStride);
+            //DrawWatermark(topDown.data(), cam.width, cam.height, absStride);
 
             hr = SaveJpeg(topDown.data(), cam.width, cam.height,
                           absStride, outPath.wstring());
@@ -538,6 +549,9 @@ int wmain(int argc, wchar_t* argv[])
     // Build the start-time stamp used in every filename.
     const std::wstring startStamp = GetLocalTimestamp();
 
+    opts.outputDir += L"\\" + startStamp;
+    fs::create_directories(opts.outputDir, ec);
+
     if (opts.maxCount >= 0)
         std::wcout << L"Capturing " << opts.maxCount << L" photo(s) per camera, "
                    << opts.delaySecs << L"s interval.\n";
@@ -548,7 +562,7 @@ int wmain(int argc, wchar_t* argv[])
 
     // Capture loop.
     long long captureRound = 0;
-
+	SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_AWAYMODE_REQUIRED);
     while (g_running)
     {
         if (opts.maxCount >= 0 && captureRound >= opts.maxCount)
@@ -569,6 +583,7 @@ int wmain(int argc, wchar_t* argv[])
 
             std::wcout << (ok ? L"  saved  " : L"  FAILED ") << filename << L"\n";
         }
+        std::wcout << L"________________\n\n";
 
         ++captureRound;
 
@@ -581,6 +596,7 @@ int wmain(int argc, wchar_t* argv[])
         while (g_running && std::chrono::steady_clock::now() < wake)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
+	SetThreadExecutionState(ES_CONTINUOUS); // clear previous away-mode request
 
     std::wcout << L"\nDone. " << captureRound << L" round(s) completed.\n";
 
